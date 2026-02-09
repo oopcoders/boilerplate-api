@@ -2,7 +2,7 @@
 
 A reusable **ASP.NET Core (.NET 10) Web API boilerplate** featuring **ASP.NET Core Identity**, **JWT authentication**, **rotating refresh tokens**, password reset flows, and **policy-based admin authorization**.
 
-This repository is **public and safe to share** with employers.  
+This repository is **public and safe to share**.  
 **No secrets are committed to source control.**
 
 ---
@@ -20,6 +20,8 @@ This repository is **public and safe to share** with employers.
 ---
 
 ## Run Locally
+```bash
+dotnet run
 
 ### Prerequisites
 - .NET SDK 10 installed
@@ -27,3 +29,7 @@ This repository is **public and safe to share** with employers.
 Verify:
 ```bash
 dotnet --version
+
+##Entity Framework Core
+```bash
+dotnet ef database update
