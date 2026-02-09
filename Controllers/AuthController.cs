@@ -1,0 +1,183 @@
+using System.Net;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using boilerplate.Api.Data;
+using boilerplate.Api.Dtos;
+using boilerplate.Api.Services;
+
+namespace boilerplate.Api.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class AuthController : ControllerBase
+{
+    private readonly UserManager<AppUser> _userManager;
+    private readonly SignInManager<AppUser> _signInManager;
+    private readonly AppDbContext _db;
+    private readonly JwtTokenService _jwt;
+    private readonly IMessageSender _sender;
+    private readonly IConfiguration _config;
+
+    public AuthController(
+        UserManager<AppUser> userManager,
+        SignInManager<AppUser> signInManager,
+        AppDbContext db,
+        JwtTokenService jwt,
+        IMessageSender sender,
+        IConfiguration config)
+    {
+        _userManager = userManager;
+        _signInManager = signInManager;
+        _db = db;
+        _jwt = jwt;
+        _sender = sender;
+        _config = config;
+    }
+
+    [HttpPost("register")]
+    public async Task<ActionResult> Register(RegisterRequest req)
+    {
+        var user = new AppUser { UserName = req.Email, Email = req.Email };
+
+        var result = await _userManager.CreateAsync(user, req.Password);
+        if (!result.Succeeded) return BadRequest(result.Errors);
+
+        // default role
+        await _userManager.AddToRoleAsync(user, "User");
+
+        // email confirm token
+        var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+        var link = $"{Request.Scheme}://{Request.Host}/api/auth/confirm-email?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";
+
+        await _sender.SendEmailAsync(user.Email!, "Confirm your email", $"Click to confirm: {link}");
+
+        return Ok(new { message = "Registered. Check dev logs for confirmation link." });
+    }
+
+    [HttpGet("confirm-email")]
+    public async Task<ActionResult> ConfirmEmail([FromQuery] string userId, [FromQuery] string token)
+    {
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user is null) return NotFound();
+
+        var result = await _userManager.ConfirmEmailAsync(user, token);
+        if (!result.Succeeded) return BadRequest(result.Errors);
+
+        return Ok(new { message = "Email confirmed." });
+    }
+
+    [HttpPost("login")]
+    public async Task<ActionResult<AuthResponse>> Login(LoginRequest req)
+    {
+        var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
+        if (user is null) return Unauthorized(new { message = "Invalid credentials." });
+
+        if (_config.GetValue("Verification:RequireConfirmedEmail", true) && !user.EmailConfirmed)
+            return Unauthorized(new { message = "Email not confirmed." });
+
+        var passOk = await _signInManager.CheckPasswordSignInAsync(user, req.Password, lockoutOnFailure: true);
+        if (!passOk.Succeeded) return Unauthorized(new { message = "Invalid credentials." });
+
+        var accessToken = await _jwt.CreateAccessTokenAsync(user);
+
+        // refresh token
+        var refreshPlain = _jwt.CreateRefreshTokenPlain();
+        var refreshHash = JwtTokenService.Sha256(refreshPlain);
+
+        var days = int.Parse(_config["Jwt:RefreshTokenDays"]!);
+
+        _db.RefreshTokens.Add(new RefreshToken
+        {
+            UserId = user.Id,
+            TokenHash = refreshHash,
+            ExpiresUtc = DateTime.UtcNow.AddDays(days)
+        });
+
+        await _db.SaveChangesAsync();
+
+        // For Postman/dev: return refresh token in response body.
+        // Later, we’ll set refresh token in HttpOnly cookie.
+        return Ok(new
+        {
+            accessToken,
+            refreshToken = refreshPlain
+        });
+    }
+
+    [HttpPost("refresh")]
+    public async Task<ActionResult> Refresh([FromBody] string refreshToken)
+    {
+        var hash = JwtTokenService.Sha256(refreshToken);
+
+        var stored = await _db.RefreshTokens
+            .Include(r => r.User)
+            .FirstOrDefaultAsync(r => r.TokenHash == hash);
+
+        if (stored is null || !stored.IsActive) return Unauthorized(new { message = "Invalid refresh token." });
+
+        // rotate refresh token
+        stored.RevokedUtc = DateTime.UtcNow;
+
+        var newPlain = _jwt.CreateRefreshTokenPlain();
+        var newHash = JwtTokenService.Sha256(newPlain);
+
+        var days = int.Parse(_config["Jwt:RefreshTokenDays"]!);
+
+        stored.ReplacedByTokenHash = newHash;
+
+        _db.RefreshTokens.Add(new RefreshToken
+        {
+            UserId = stored.UserId,
+            TokenHash = newHash,
+            ExpiresUtc = DateTime.UtcNow.AddDays(days)
+        });
+
+        var newAccess = await _jwt.CreateAccessTokenAsync(stored.User);
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            accessToken = newAccess,
+            refreshToken = newPlain
+        });
+    }
+
+    [HttpPost("forgot-password")]
+    public async Task<ActionResult> ForgotPassword(ForgotPasswordRequest req)
+    {
+        var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
+
+        // Always return OK to prevent email enumeration
+        if (user is null) return Ok(new { message = "If that email exists, a reset link was sent." });
+
+        var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+        var link = $"{Request.Scheme}://{Request.Host}/api/auth/reset-password?email={Uri.EscapeDataString(user.Email!)}&token={Uri.EscapeDataString(token)}";
+
+        await _sender.SendEmailAsync(user.Email!, "Reset your password", $"Reset link: {link}");
+
+        return Ok(new { message = "If that email exists, a reset link was sent. Check dev logs." });
+    }
+
+    [HttpPost("reset-password")]
+    public async Task<ActionResult> ResetPassword(ResetPasswordRequest req)
+    {
+        var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
+        if (user is null) return BadRequest(new { message = "Invalid request." });
+
+        var token = WebUtility.UrlDecode(req.Token);
+        // or: var token = Uri.UnescapeDataString(req.Token);
+
+        var result = await _userManager.ResetPasswordAsync(user, token, req.NewPassword);
+
+        if (!result.Succeeded) return BadRequest(result.Errors);
+
+        return Ok(new { message = "Password reset successful." });
+    }
+
+    [Authorize(Policy = "AdminOnly")]
+    [HttpGet("admin-only-test")]
+    public ActionResult AdminOnlyTest() => Ok(new { message = "You are Admin." });
+}
