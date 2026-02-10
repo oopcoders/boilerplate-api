@@ -64,6 +64,22 @@ builder.Services.AddAuthorization(opt =>
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddSingleton<IMessageSender, DevMessageSender>();
 
+
+//CORS
+var corsPolicyName = "SpaDevCors";
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(corsPolicyName, policy =>
+    {
+        policy
+            .WithOrigins("http://localhost:4200")
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials(); // only if you use cookies; safe to keep off otherwise
+    });
+});
+
 var app = builder.Build();
 
 // Swagger (dev only)
@@ -74,6 +90,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors(corsPolicyName);
+
 
 app.UseAuthentication();
 app.UseAuthorization();
