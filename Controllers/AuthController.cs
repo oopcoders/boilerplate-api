@@ -181,10 +181,17 @@ public class AuthController : ControllerBase
         var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
         if (user is null) return BadRequest(new { message = "Invalid request." });
 
-        var token = WebUtility.UrlDecode(req.Token);
-        // or: var token = Uri.UnescapeDataString(req.Token);
+        var token = req.Token ?? "";
+
+        // If the client sent an encoded token (contains %2F, %2B, etc), decode once.
+        if (token.Contains('%'))
+            token = Uri.UnescapeDataString(token);
+
+        // If + turned into space anywhere, revert it.
+        token = token.Replace(" ", "+");
 
         var result = await _userManager.ResetPasswordAsync(user, token, req.NewPassword);
+
 
         if (!result.Succeeded) return BadRequest(result.Errors);
 
