@@ -6,6 +6,8 @@ using Microsoft.EntityFrameworkCore;
 using boilerplate.Api.Data;
 using boilerplate.Api.Dtos;
 using boilerplate.Api.Services;
+using Microsoft.Extensions.Options;
+using boilerplate.Api.Configuration;
 
 namespace boilerplate.Api.Controllers;
 
@@ -18,7 +20,9 @@ public class AuthController : ControllerBase
     private readonly AppDbContext _db;
     private readonly JwtTokenService _jwt;
     private readonly IMessageSender _sender;
-    private readonly IConfiguration _config;
+    private readonly ClientAppOptions _clientApp;
+    private readonly VerificationOptions _verification;
+    private readonly JwtOptions _jwtOptions;
 
     public AuthController(
         UserManager<AppUser> userManager,
@@ -26,14 +30,18 @@ public class AuthController : ControllerBase
         AppDbContext db,
         JwtTokenService jwt,
         IMessageSender sender,
-        IConfiguration config)
+        IOptions<ClientAppOptions> clientAppOptions,
+        IOptions<VerificationOptions> verificationOptions,
+        IOptions<JwtOptions> jwtOptions)
     {
         _userManager = userManager;
         _signInManager = signInManager;
         _db = db;
         _jwt = jwt;
         _sender = sender;
-        _config = config;
+        _clientApp = clientAppOptions.Value;
+        _verification = verificationOptions.Value;
+        _jwtOptions = jwtOptions.Value;
     }
 
     [HttpPost("register")]
@@ -74,7 +82,7 @@ public class AuthController : ControllerBase
         var user = await _userManager.Users.FirstOrDefaultAsync(u => u.Email == req.Email);
         if (user is null) return Unauthorized(new { message = "Invalid credentials." });
 
-        if (_config.GetValue("Verification:RequireConfirmedEmail", true) && !user.EmailConfirmed)
+        if (_verification.RequireConfirmedEmail && !user.EmailConfirmed)
             return Unauthorized(new { message = "Email not confirmed." });
 
         var passOk = await _signInManager.CheckPasswordSignInAsync(user, req.Password, lockoutOnFailure: true);
@@ -86,7 +94,7 @@ public class AuthController : ControllerBase
         var refreshPlain = _jwt.CreateRefreshTokenPlain();
         var refreshHash = JwtTokenService.Sha256(refreshPlain);
 
-        var days = int.Parse(_config["Jwt:RefreshTokenDays"]!);
+        var days = _jwtOptions.RefreshTokenDays;
 
         _db.RefreshTokens.Add(new RefreshToken
         {
@@ -123,7 +131,7 @@ public class AuthController : ControllerBase
         var newPlain = _jwt.CreateRefreshTokenPlain();
         var newHash = JwtTokenService.Sha256(newPlain);
 
-        var days = int.Parse(_config["Jwt:RefreshTokenDays"]!);
+        var days = _jwtOptions.RefreshTokenDays;
 
         stored.ReplacedByTokenHash = newHash;
 
@@ -153,10 +161,16 @@ public class AuthController : ControllerBase
         // Always return OK to prevent email enumeration
         if (user is null) return Ok(new { message = "If that email exists, a reset link was sent." });
 
+
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-        var link = $"{Request.Scheme}://{Request.Host}/api/auth/reset-password?email={Uri.EscapeDataString(user.Email!)}&token={Uri.EscapeDataString(token)}";
+
+        var baseUrl = _clientApp.BaseUrl.TrimEnd('/');
+        var link = $"{baseUrl}/auth/reset-password" +
+                $"?email={Uri.EscapeDataString(user.Email!)}" +
+                $"&token={Uri.EscapeDataString(token)}";
 
         await _sender.SendEmailAsync(user.Email!, "Reset your password", $"Reset link: {link}");
+
 
         return Ok(new { message = "If that email exists, a reset link was sent. Check dev logs." });
     }

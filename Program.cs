@@ -5,8 +5,15 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using boilerplate.Api.Data;
 using boilerplate.Api.Services;
+using boilerplate.Api.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
+
+
+builder.Services.Configure<ClientAppOptions>(builder.Configuration.GetSection("ClientApp"));
+builder.Services.Configure<VerificationOptions>(builder.Configuration.GetSection("Verification"));
+builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
+
 
 builder.Services.AddControllers();
 
