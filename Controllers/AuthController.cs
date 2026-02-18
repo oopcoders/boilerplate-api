@@ -105,13 +105,20 @@ public class AuthController : ControllerBase
 
         await _db.SaveChangesAsync();
 
-        // For Postman/dev: return refresh token in response body.
-        // Later, we’ll set refresh token in HttpOnly cookie.
-        return Ok(new
-        {
-            accessToken,
-            refreshToken = refreshPlain
-        });
+        var roles = await _userManager.GetRolesAsync(user);
+
+        var response = new AuthResponse(
+            AccessToken: accessToken,
+            RefreshToken: refreshPlain,
+            User: new UserDto(
+                Id: user.Id,
+                Username: user.UserName ?? "",
+                Email: user.Email ?? "",
+                Roles: roles.ToArray()
+            )
+        );
+
+        return Ok(response);
     }
 
     [HttpPost("refresh")]
