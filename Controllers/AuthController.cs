@@ -8,6 +8,8 @@ using boilerplate.Api.Dtos;
 using boilerplate.Api.Services;
 using Microsoft.Extensions.Options;
 using boilerplate.Api.Configuration;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace boilerplate.Api.Controllers;
 
@@ -208,4 +210,28 @@ public class AuthController : ControllerBase
     [Authorize(Policy = "AdminOnly")]
     [HttpGet("admin-only-test")]
     public ActionResult AdminOnlyTest() => Ok(new { message = "You are Admin." });
+
+    [Authorize]
+    [HttpGet("me")]
+    public async Task<ActionResult<UserDto>> Me()
+    {
+        var userId =
+            User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+        if (string.IsNullOrWhiteSpace(userId))
+            return Unauthorized(new { message = "Missing user id claim." });
+
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user is null) return Unauthorized(new { message = "User not found." });
+
+        var roles = await _userManager.GetRolesAsync(user);
+
+        return Ok(new UserDto(
+            Id: user.Id,
+            Username: user.UserName ?? "",
+            Email: user.Email ?? "",
+            Roles: roles.ToArray()
+        ));
+    }
 }
